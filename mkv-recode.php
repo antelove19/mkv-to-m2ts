@@ -325,7 +325,9 @@ function perform_transcode($setup) {
 
 	echo 'Cleaning up temporary files ... ';
 	unlink($setup['temp_dir'].'video.h264');
-	unlink($setup['temp_dir'].'audio.dts');
+	if ($setup['audio_codec'] == 'A_DTS') {
+		unlink($setup['temp_dir'].'audio.dts');
+	}
 	unlink($setup['temp_dir'].'audio.ac3');
 	unlink($setup['temp_dir'].'tsmuxer.meta');
 	echo 'done!'."\n";
