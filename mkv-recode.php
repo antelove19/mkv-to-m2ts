@@ -34,47 +34,98 @@
 
 /**
  * Display the arguments available for this program that are required and optinal for it's use
+ *
+ * @param array $argv The CLI arguments specified to execute this program
  */
 function print_usage($argv) {
-    echo $argv[0].' --in=input_filename [--out=output_filename] [--tmp=temp_dir]'."\n\n";
+    echo $argv[0].' -i "input_filename" [-o"output_filename"] [-t"temp_dir"]'."\n\n";
     exit;
 }
 
 /**
- * Validate the input parameters and get our setup object started
+ * Display an error message and halt execution
+ *
+ * @param string $err The error message to display
  */
-function validate_parameters(&$setup, $options) {
-    if (!file_exists($options['in'])) {
-        die('ERROR: invalid input file "'.$options['in'].'"'."\n");
+function print_error($err) {
+    die('ERROR: '.$err."\n");
+}
+
+/**
+ * Fetch a value from a SimpleXMLElement object based on an xpath search query.
+ *
+ * @param SimpleXMLElement $element  A SimpleXMLElement object to perform a xpath() call on
+ * @param string           $xpath    The xpath string to search for on the given element
+ * @param string           $type     An optional type to cast the returned value as (string, int, float)
+ * @param string           $errormsg An optional error message to display if the xpath fails
+ */
+function fetch_xpath_value($element, $xpath, $type = '', $errormsg = '') {
+    if (!is_a($element, 'SimpleXMLElement')) {
+        print_error('fetch_xpath_value: invalid $element parameter specified: '.get_class($element));
     }
 
-    $setup['file_in'] = $options['in'];
+    $result = $element->xpath($xpath);
+    if (!is_array($result)) {
+        print_error(!empty($errormsg) ? $errormsg : 'no results found for xpath: '.$xpath);
+    }
+
+    switch ($type) {
+        case 'int':
+            return (int)current($result);
+            break;
+        case 'string':
+            return (string)current($result);
+            break;
+        case 'float':
+            return (float)current($result);
+            break;
+        case 'array':
+            return $result;
+            break;
+        default:
+            return current($result);
+            break;
+    }
+}
+
+/**
+ * Validate the input parameters and get our setup object started
+ *
+ * @param array $setup   A reference to an array containing script setup data
+ * @param array $options An array containing the CLI arguments passed into this script
+ */
+function validate_parameters(&$setup, $options) {
+    if (!file_exists($options['i'])) {
+        print_error('invalid input file "'.$options['i'].'"');
+    }
+
+    $setup['file_in'] = $options['i'];
 
     // If an output dir/file was specified, validate that and setup the appropriate output file path and name
-    if (isset($options['out'])) {
+    if (isset($options['o'])) {
         // If a directory was specified, store the converted file there using the same filename with the .m2ts extension
-        if (is_dir($options['out'])) {
-            if ($options['out'][strlen($options['out']) - 1] != '/') {
-                $options['out'] .= '/';
+        if (is_dir($options['o'])) {
+            if ($options['o'][strlen($options['o']) - 1] != '/') {
+                $options['o'] .= '/';
             }
-            $setup['file_out'] = $options['out'].basename($setup['file_in'], '.mkv').'.m2ts';
+            $setup['file_out'] = $options['o'].basename($setup['file_in'], '.mkv').'.m2ts';
 
         // If a full file path was specified, verify that the directory exists and the given file name does not
         } else {
-            $pathinfo = pathinfo($options['out']);
+            $pathinfo = pathinfo($options['o']);
 
             // Check if a malformed directory name was specified as input (output file must contain .m2ts extension)
-            if (($pathinfo['basename'] == $pathinfo['filename']) && !is_dir($options['out'])) {
-                die('ERROR: "'.$pathinfo['dirname'].'" is not a valid directory'."\n");
+            if (($pathinfo['basename'] == $pathinfo['filename']) && !is_dir($options['o'])) {
+                print_error($pathinfo['dirname'].'" is not a valid directory');
             }
-            if (file_exists($options['out'])) {
-                die('ERROR: cannot write output to "'.$options['out'].'"" as that file already exists'."\n");
+            if (file_exists($options['o'])) {
+                print_error('cannot write output to "'.$options['o'].'"" as that file already exists');
             }
-            if (substr($options['out'], -4) !== '.m2ts') {
-                die('ERROR: output filename must use the .m2ts extension'."\n");
+            if (substr($options['o'], -4) !== '.m2ts') {
+                print_error('output filename must use the .m2ts extension');
             }
 
-            $setup['file_out'] = $options['out'];
+            $setup['file_out'] = $options['o'];
         }
     } else {
         // Just use the input filename with the .m2ts and write the new file in the same directory as the input file
@@ -84,11 +135,11 @@ function validate_parameters(&$setup, $options) {
     }
 
     // If a temp directory was specified, validate that it is a directory
-    if (isset($options['tmp'])) {
-        if (!is_dir($options['tmp'])) {
-            die('ERROR: temp directory "'.$options['tmp'].'" is invalid');
+    if (isset($options['t'])) {
+        if (!is_dir($options['t'])) {
+            print_error('temp directory "'.$options['t'].'" is invalid');
         } else {
-            $setup['temp_dir'] = $options['tmp'];
+            $setup['temp_dir'] = $options['t'];
         }
     } else {
         // Use the current directory as the temporary storage
@@ -102,6 +153,8 @@ function validate_parameters(&$setup, $options) {
 
 /**
  * Check for required programs
+ *
+ * @param array $setup   A reference to an array containing script setup data
  */
 function check_requirements(&$setup) {
     $setup['programs'] = array(
@@ -117,7 +170,7 @@ function check_requirements(&$setup) {
         $output = array();
         exec('which '.$prog, $output, $return);
         if ($return != 0) {
-            die('ERROR: Could not find path for executable "'.$prog.'"'."\n");
+            print_error('could not find path for executable "'.$prog.'"');
         }
         $setup['programs'][$prog] = $output[0];
     }
@@ -125,152 +178,116 @@ function check_requirements(&$setup) {
 
 /**
  * Check for a valid input file and setup some variables for the transcoding process
+ *
+ * @param array $setup   A reference to an array containing script setup data
+ * @param array $options An array containing the CLI arguments passed into this script
  */
 function validate_input(&$setup, $options) {
     // Get an XML document describing the input file's container and various A/V streams within
     exec($setup['programs']['mediainfo'].' --Output=XML "'.$setup['file_in'].'"', $output, $return);
 
     if ($return != 0) {
-        die('ERROR: executing command: "'.$setup['programs']['mediainfo'].' --Output=XML '.$setup['file_in'].'"'."\n");
+        print_error('executing command: "'.$setup['programs']['mediainfo'].' --Output=XML '.$setup['file_in'].'"');
     }
 
     $mediainfoxml = implode("\n", $output);
-
-    $mediainfo = new SimpleXMLElement($mediainfoxml);
+    $mediainfo    = new SimpleXMLElement($mediainfoxml);
 
     // Check the container format of the input file
-    $container_format = $mediainfo->xpath('File/track[@type="General"]/Format');
-    if (!is_array($container_format)) {
-        die('ERROR: No input container format specified')."\n";
-    }
-    if (strtoupper(current($container_format)) != 'MATROSKA') {
-        die('ERROR: Invalid input container format: '.(string)current($container_format)."\n");
+    $container_format = fetch_xpath_value($mediainfo, 'File/track[@type="General"]/Format', 'string', 'no input container format specified');
+    if (strtoupper($container_format) != 'MATROSKA') {
+        print_error('invalid input container format: '.$container_format);
     }
 
     // Check for a video stream
-    $video_stream = $mediainfo->xpath('File/track[@type="Video"]');
+    $video_stream = fetch_xpath_value($mediainfo, 'File/track[@type="Video"]', '', 'no input video stream found');
 
-    if (!is_array($video_stream)) {
-        die('ERROR: No input video stream found'."\n");
-    }
-
-    $video_stream = current($video_stream);
-
-    $video_id = $video_stream->xpath('./ID');
-    if (empty($video_id)) {
-        die('ERROR: no video stream ID found'."\n");
-    }
-
-    $setup['video_stream'] = (int)current($video_id) - 1;
+    // Get the ID (required for mkvextract) for the video stream
+    $video_id = fetch_xpath_value($video_stream, './ID', 'int', 'no video stream ID found');
+    $setup['video_stream'] = $video_id - 1;
 
     // Check for a valid video stream in the input file
-    $video_format = $video_stream->xpath('./Codec_ID');
-    if (!is_array($video_format)) {
-        die('ERROR: No input video codec specified'."\n");
-    }
-
-    $video_format = current($video_format);
-
-    if (strtoupper($video_format) != 'V_MPEG4/ISO/AVC') {
-        die('ERROR: Invalid input video codec: '.(string)$video_format."\n");
+    $video_format = fetch_xpath_value($video_stream, './Codec_ID', 'string', 'no input video codec specified');
+    if ($video_format != 'V_MPEG4/ISO/AVC') {
+        print_error('invalid input video codec: '.(string)$video_format);
     }
 
     // Check for the format level of the video stream
-    $format_level = $video_stream->xpath('./Format_profile');
-    if (!is_array($format_level)) {
-        die('ERROR: No video format level found'."\n'");
-    }
-
-    $format_level = (string)current($format_level);
+    $format_level = fetch_xpath_value($video_stream, './Format_profile', 'string', 'no video format level found');
     preg_match('/@L([1-9]\.[0-9])/', $format_level, $matches);
-
     if (!isset($matches[1])) {
-        die('ERROR: could not detect valid video format level'."\n");
+        print_error('could not detect valid video format level');
     }
     $setup['video_format_level'] = (float)$matches[1];
 
     // Check for the FPS of the video stream
-    $frame_rate = $video_stream->xpath('./Frame_rate');
-    if (!is_array($frame_rate)) {
-        die('ERROR: No video format frame rate found'."\n'");
-    }
-
-    $frame_rate = (string)current($frame_rate);
+    $frame_rate = fetch_xpath_value($video_stream, './Frame_rate', 'string', 'no video format frame rate found');
     preg_match('/([1-9]+\.[0-9]+) fps/', $frame_rate, $matches);
     if (!isset($matches[1])) {
-        die('ERROR: could not detect valid video frame rate level'."\n");
+        print_error('could not detect valid video frame rate level');
     }
     $setup['video_fps'] = $matches[1];
 
     // Check for a valid audio stream in the input file
-    $audio_streams = $mediainfo->xpath('File/track[@type="Audio"]');
-    if (!is_array($audio_streams)) {
-        die('ERROR: No input audio streams specified'."\n");
-    }
+    $audio_streams = fetch_xpath_value($mediainfo, 'File/track[@type="Audio"]', 'array', 'no input audio streams specified');
 
     foreach ($audio_streams as $audio_stream) {
         if (isset($setup['audio_stream'])) {
             continue;
         }
-        // var_dump($audio_stream);
-        $audio_format = $audio_stream->xpath('./Codec_ID');
-        if (!is_array($audio_format)) {
-            die('ERROR: No input audio codec specified'."\n");
-        }
 
-        $audio_format = current($audio_format);
+        // Get the format for the current audio stream
+        $audio_format = fetch_xpath_value($audio_stream, './Codec_ID', 'string', 'no input audio codec specified');
 
         // Prefer a DTS stream over an AC3 stream in the case where both are present
-        if ((string)$audio_format == 'A_DTS' || (string)$audio_format == 'A_AC3') {
-            $audio_id = $audio_stream->xpath('./ID');
-            if (empty($audio_id)) {
-                die('ERROR: no audio stream ID found'."\n");
+        if ($audio_format == 'A_DTS' || $audio_format == 'A_AC3') {
+            // Get the audio stream language and verify that it is English
+            $language = fetch_xpath_value($audio_stream, './Language', 'string', 'no audio stream language found');
+            if (strtoupper($language) != 'ENGLISH') {
+                continue;
             }
 
-            $setup['audio_stream'] = (int)current($audio_id) - 1;
-            $setup['audio_codec']  = (string)$audio_format;
+            // Get the ID (required for mkvextract) for the current audio stream
+            $setup['audio_stream'] = fetch_xpath_value($audio_stream, './ID', 'int', 'no audio stream ID found') - 1;
+            $setup['audio_codec']  = $audio_format;
 
             // For DTS we need to gather more information for converting the audio into AC3 format
             if ($setup['audio_codec'] == 'A_DTS') {
                 // Get the audio stream bitrate
-                $audio_bitrate = $audio_stream->xpath('./Bit_rate');
-                if (!is_array($audio_bitrate)) {
-                    die('ERROR: no audio bitrate found'."\n");
-                }
-
-                $audio_bitrate = (string)current($audio_bitrate);
-
+                $audio_bitrate = fetch_xpath_value($audio_stream, './Bit_rate', 'string', 'no audio bitrate found');
                 preg_match('/([0-9]+) KBPS/', strtoupper($audio_bitrate), $matches);
+                if (!isset($matches[1])) {
+                    print_error('could not detect valid audio bit rate');
+                }
                 $setup['audio_bitrate'] = $matches[1];
 
                 // Get the audio stream channel count
-                $audio_channels = $audio_stream->xpath('./Channel_s_');
-                if (!is_array($audio_channels)) {
-                    die('ERROR: no audio channel information found'."\n");
-                }
-
-                $audio_channels = (string)current($audio_channels);
-
+                $audio_channels = fetch_xpath_value($audio_stream, './Channel_s_', 'string', 'no audio channel information found');
                 preg_match('/([0-9]) CHANNELS/', strtoupper($audio_channels), $matches);
+                    if (!isset($matches[1])) {
+                        print_error('could not detect valid audio channel information');
+                    }
                 $setup['audio_channels'] = $matches[1];
             }
         }
     }
 
     if (!isset($setup['audio_codec'])) {
-        die('ERROR: No valid audio video codecs found'."\n");
+        print_error('no valid audio video codecs found');
     }
 }
 
 /**
  * Perform the actual transcode process based on the variables setup from the input validation
+ *
+ * @param array $setup An array containing script setup data
  */
 function perform_transcode($setup) {
     // Extract the video stream into a file
     echo 'Extracting video stream ... ';
     exec($setup['programs']['mkvextract'].' tracks "'.$setup['file_in'].'" '.$setup['video_stream'].':'.$setup['temp_dir'].'video.h264', $output, $return);
     if ($return != 0) {
-        die('ERROR: Failure while executing mkvextract'."\n\n".implode("\n", $output));
+        print_error('failure while executing mkvextract'."\n\n".implode("\n", $output));
     }
     echo 'done!'."\n";
 
@@ -279,28 +296,28 @@ function perform_transcode($setup) {
         echo 'Extracting audio stream ... ';
         exec($setup['programs']['mkvextract'].' tracks "'.$setup['file_in'].'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.dts', $output, $return);
         if ($return != 0) {
-            die('ERROR: Failure while executing mkvextract'."\n\n".implode("\n", $output));
+            print_error('failure while executing mkvextract'."\n\n".implode("\n", $output));
         }
         echo 'done!'."\n";
 
         echo 'Converting DTS audio stream to AC3 ... ';
         exec($setup['programs']['dcadec'].' -o wavall "'.$setup['temp_dir'].'audio.dts" | aften -b 640 -v 0 - "'.$setup['temp_dir'].'audio.ac3"', $output, $return);
         if ($return != 0) {
-            die('ERROR: Failure while executing dcadec and aften'."\n\n".implode("\n", $output));
+            print_error('failure while executing dcadec and aften'."\n\n".implode("\n", $output));
         }
         echo 'done!'."\n";
     } else {
         echo 'Extracting audio stream ... ';
         exec($setup['programs']['mkvextract'].' tracks "'.$setup['file_in'].'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.ac3', $output, $return);
         if ($return != 0) {
-            die('ERROR: Failure while executing mkvextract'."\n\n".implode("\n", $output));
+            print_error('failure while executing mkvextract'."\n\n".implode("\n", $output));
         }
         echo 'done!'."\n";
     }
 
     // Generate the meta information file for tsMuxeR
     if (!$fh = fopen($setup['temp_dir'].'tsmuxer.meta', 'w+')) {
-        die('ERRROR: Could not open meta file for writing'."\n");
+        print_error('Cculd not open meta file for writing');
     }
 
     fwrite($fh, 'MUXOPT --no-pcr-on-video-pid --new-audio-pes --vbr  --vbv-len=500'."\n");
@@ -317,7 +334,7 @@ function perform_transcode($setup) {
     echo 'Packaging M2TS file ...';
     exec($setup['programs']['tsMuxeR'].' '.$setup['temp_dir'].'tsmuxer.meta "'.$setup['file_out'].'"', $output, $return);
     if ($return != 0) {
-        die('ERROR: Failure while executing tsMuxeR'."\n\n".implode("\n", $output));
+        print_error('failure while executing tsMuxeR'."\n\n".implode("\n", $output));
     }
     echo 'done!'."\n";
 
@@ -338,7 +355,8 @@ function perform_transcode($setup) {
 
 
 // Get CLI script arguments
-if (($options = getopt('', array('in:', 'out::', 'tmp::'))) == false) {
+// if (($options = getopt('', array('in:', 'out::', 'tmp::'))) == false) {
+if (!$options = getopt("i:o::t::")) {
     print_usage($argv);
 }
 
