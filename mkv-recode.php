@@ -243,7 +243,9 @@ function validate_input(&$setup, $options) {
         if ($audio_format == 'A_DTS' || $audio_format == 'A_AC3') {
             // Get the audio stream language and verify that it is English
             $language = fetch_xpath_value($audio_stream, './Language', 'string', 'no audio stream language found');
-            if (strtoupper($language) != 'ENGLISH') {
+            
+            // If an audio language is specified and it is not English, keep looking (assume English if no language specified)
+            if (!empty($language) && strtoupper($language) != 'ENGLISH') {
                 continue;
             }
 
