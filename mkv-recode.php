@@ -240,7 +240,7 @@ function validate_input(&$setup, $options) {
         $audio_format = fetch_xpath_value($audio_stream, './Codec_ID', 'string', 'no input audio codec specified');
 
         // Prefer a DTS stream over an AC3 stream in the case where both are present
-        if ($audio_format == 'A_DTS' || $audio_format == 'A_AC3') {
+        if ($audio_format == 'A_DTS' || $audio_format == 'A_AC3' || $audio_format = 'A_AAC') {
             // Get the audio stream language and verify that it is English
             $language = fetch_xpath_value($audio_stream, './Language', 'string', 'no audio stream language found');
             
@@ -266,9 +266,9 @@ function validate_input(&$setup, $options) {
                 // Get the audio stream channel count
                 $audio_channels = fetch_xpath_value($audio_stream, './Channel_s_', 'string', 'no audio channel information found');
                 preg_match('/([0-9]) CHANNELS/', strtoupper($audio_channels), $matches);
-                    if (!isset($matches[1])) {
-                        print_error('could not detect valid audio channel information');
-                    }
+                if (!isset($matches[1])) {
+                    print_error('could not detect valid audio channel information');
+                }
                 $setup['audio_channels'] = $matches[1];
             }
         }
@@ -308,9 +308,16 @@ function perform_transcode($setup) {
             print_error('failure while executing dcadec and aften'."\n\n".implode("\n", $output));
         }
         echo 'done!'."\n";
-    } else {
+    } else if ($setup['audio_codec'] == 'A_AC3') {
         echo 'Extracting audio stream ... ';
         exec($setup['programs']['mkvextract'].' tracks "'.$setup['file_in'].'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.ac3', $output, $return);
+        if ($return != 0) {
+            print_error('failure while executing mkvextract'."\n\n".implode("\n", $output));
+        }
+        echo 'done!'."\n";
+    } else if ($setup['audio_codec'] == 'A_AAC') {
+        echo 'Extracting audio stream ... ';
+        exec($setup['programs']['mkvextract'].' tracks "'.$setup['file_in'].'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.aac', $output, $return);
         if ($return != 0) {
             print_error('failure while executing mkvextract'."\n\n".implode("\n", $output));
         }
@@ -330,7 +337,11 @@ function perform_transcode($setup) {
         fwrite($fh, 'V_MPEG4/ISO/AVC, "'.$setup['temp_dir'].'video.h264", insertSEI, contSPS, lang=eng, fps='.$setup['video_fps']."\n");
     }
 
-    fwrite($fh, 'A_AC3, "'.$setup['temp_dir'].'audio.ac3"'."\n");
+    if ($setup['audio_codec'] == 'A_DTS' || $setup['audio_codec'] == 'A_AC3') {
+        fwrite($fh, 'A_AC3, "'.$setup['temp_dir'].'audio.ac3"'."\n");
+    } else if ($setup['audio_codec'] == 'A_AAc') {
+        fwrite($fh, 'A_AAC, "'.$setup['temp_dir'].'audio.aac"'."\n");
+    }
     fclose($fh);
 
     echo 'Packaging M2TS file ...';
@@ -338,6 +349,7 @@ function perform_transcode($setup) {
     if ($return != 0) {
         print_error('failure while executing tsMuxeR'."\n\n".implode("\n", $output));
     }
+
     echo 'done!'."\n";
 
     echo 'Cleaning up temporary files ... ';
@@ -345,7 +357,11 @@ function perform_transcode($setup) {
     if ($setup['audio_codec'] == 'A_DTS') {
         unlink($setup['temp_dir'].'audio.dts');
     }
-    unlink($setup['temp_dir'].'audio.ac3');
+    if ($setup['audio_codec'] == 'A_DTS' || $setup['audio_codec'] == 'A_AC3') {
+        unlink($setup['temp_dir'].'audio.ac3');
+    } else if ($setup['audio_codec'] ==	'A_AAC') {
+        unlink($setup['temp_dir'].'audio.aac');
+    }
     unlink($setup['temp_dir'].'tsmuxer.meta');
     echo 'done!'."\n";
 }
