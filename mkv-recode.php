@@ -1,4 +1,4 @@
-#!/usr/bin/php
+#!/usr/bin/env php
 <?php
 
 // This script is free software: you can redistribute it and/or modify
@@ -163,16 +163,19 @@ function check_requirements(&$setup) {
         'mkvextract' => '',
         'dcadec'     => '',
         'aften'      => '',
-        'tsMuxeR'    => ''
+        'tsMuxeR'    => '',
+        'mkvmerge'   => 'optional'
     );
 
     foreach ($setup['programs'] as $prog => $path) {
         $output = array();
         exec('which '.$prog, $output, $return);
-        if ($return != 0) {
+        // Only print an error if the program is required
+        if ($return != 0 && $path != 'optional') {
             print_error('could not find path for executable "'.$prog.'"');
+        } else {
+            $setup['programs'][$prog] = $output[0];
         }
-        $setup['programs'][$prog] = $output[0];
     }
 }
 
@@ -280,14 +283,89 @@ function validate_input(&$setup, $options) {
 }
 
 /**
+ * Cleanup any temporary files created during the media transcode / repackage process
+ *
+ * @param array $setup An array containing script setup data
+ */
+function cleanup_temp_files($setup) {
+    echo 'Cleaning up temporary files ... ';
+    unlink($setup['temp_dir'].'video.h264');
+    if ($setup['audio_codec'] == 'A_DTS') {
+        unlink($setup['temp_dir'].'audio.dts');
+    }
+    if ($setup['audio_codec'] == 'A_DTS' || $setup['audio_codec'] == 'A_AC3') {
+        unlink($setup['temp_dir'].'audio.ac3');
+    } else if ($setup['audio_codec'] == 'A_AAC') {
+        unlink($setup['temp_dir'].'audio.aac');
+    }
+    unlink($setup['temp_dir'].'tsmuxer.meta');
+    echo 'done!'."\n";
+}
+
+/**
+ * Rip apart the audio and video streams, re-building the original MKV container to pass through
+ * the encoding process again.
+ *
+ * @param array $setup An array containing script setup data
+ * @return bool True on success, False otherwise
+ */
+function container_rebuild($setup) {
+    if ($setup['programs']['mkvextract'] == 'optional') {
+        print_error('required program to repackage an MKV container are missing: mkvmerge');
+        return false;
+    }
+
+    $setup['file_repack'] = str_replace('.mkv', '.TEMPORARY_FILE.mkv', $setup['file_in']);
+
+    $execstr = $setup['programs']['mkvmerge'].' -o "'.$setup['file_repack'].'" --default-duration 0:'.$setup['video_fps'].'fps '.
+               $setup['temp_dir'].'video.h264 ';
+
+    switch ($setup['audio_codec']) {
+        case 'A_DTS':
+        case 'A_AC3':
+            $execstr .= $setup['temp_dir'].'audio.ac3';
+            break;
+
+        case 'A_AAC':
+            $execstr .= '-aac-is-sbr 0 '.$setup['temp_dir'].'audio.aac';
+            break;
+    }
+
+    echo 'Building a new temporary MKV file ... ';
+    exec($execstr, $output, $return);
+    echo 'done!'."\n";
+
+    if ($return != 0) {
+        cleanup_temp_files($setup);
+        // If the new, repackaged, file exists, we need to remove it as well.
+        if (file_exists($setup['file_repack'])) {
+            unlink($setup['file_repack']);
+        }
+
+        print_error('failure while executing mkvmerge'."\n\n".implode("\n", $output));
+        exit;
+    }
+
+    // Remove existing temporary files as we are going to be extracting streams again from our new MKV
+    cleanup_temp_files($setup);
+    perform_transcode($setup);
+}
+
+/**
  * Perform the actual transcode process based on the variables setup from the input validation
  *
  * @param array $setup An array containing script setup data
  */
 function perform_transcode($setup) {
+    if (isset($setup['file_repack'])) {
+        $infile = $setup['file_repack'];
+    } else {
+        $infile = $setup['file_in'];
+    }
+
     // Extract the video stream into a file
     echo 'Extracting video stream ... ';
-    exec($setup['programs']['mkvextract'].' tracks "'.$setup['file_in'].'" '.$setup['video_stream'].':'.$setup['temp_dir'].'video.h264', $output, $return);
+    exec($setup['programs']['mkvextract'].' tracks "'.$infile.'" '.$setup['video_stream'].':'.$setup['temp_dir'].'video.h264', $output, $return);
     if ($return != 0) {
         print_error('failure while executing mkvextract'."\n\n".implode("\n", $output));
     }
@@ -296,7 +374,7 @@ function perform_transcode($setup) {
     // DTS audio must be converted to AC3 format
     if ($setup['audio_codec'] == 'A_DTS') {
         echo 'Extracting audio stream ... ';
-        exec($setup['programs']['mkvextract'].' tracks "'.$setup['file_in'].'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.dts', $output, $return);
+        exec($setup['programs']['mkvextract'].' tracks "'.$infile.'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.dts', $output, $return);
         if ($return != 0) {
             print_error('failure while executing mkvextract'."\n\n".implode("\n", $output));
         }
@@ -310,14 +388,14 @@ function perform_transcode($setup) {
         echo 'done!'."\n";
     } else if ($setup['audio_codec'] == 'A_AC3') {
         echo 'Extracting audio stream ... ';
-        exec($setup['programs']['mkvextract'].' tracks "'.$setup['file_in'].'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.ac3', $output, $return);
+        exec($setup['programs']['mkvextract'].' tracks "'.$infile.'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.ac3', $output, $return);
         if ($return != 0) {
             print_error('failure while executing mkvextract'."\n\n".implode("\n", $output));
         }
         echo 'done!'."\n";
     } else if ($setup['audio_codec'] == 'A_AAC') {
         echo 'Extracting audio stream ... ';
-        exec($setup['programs']['mkvextract'].' tracks "'.$setup['file_in'].'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.aac', $output, $return);
+        exec($setup['programs']['mkvextract'].' tracks "'.$infile.'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.aac', $output, $return);
         if ($return != 0) {
             print_error('failure while executing mkvextract'."\n\n".implode("\n", $output));
         }
@@ -344,26 +422,27 @@ function perform_transcode($setup) {
     }
     fclose($fh);
 
-    echo 'Packaging M2TS file ...';
+    echo 'Packaging M2TS file ... ';
     exec($setup['programs']['tsMuxeR'].' '.$setup['temp_dir'].'tsmuxer.meta "'.$setup['file_out'].'"', $output, $return);
     if ($return != 0) {
-        print_error('failure while executing tsMuxeR'."\n\n".implode("\n", $output));
+        $lines = implode("\n", $output);
+
+        // If there was an error detecting FPS when creating the M2TS container, let's try to rebuild the MKV container
+        // NOTE: this only happens if we are not trying to assemble the M2TS file from a repakcaged MKV
+        if (!isset($setup['file_repack']) && strpos($lines, 'Frame rate: not found') !== false &&
+                strpos($lines, 'H.264 stream does not contain fps field') !== false) {
+
+            echo 'failed! Attempting to repackage MKV file and try again.'."\n";
+            container_rebuild($setup);
+            exit;
+        } else {
+            print_error('failure while executing tsMuxeR'."\n\n".$lines);
+        }
     }
 
     echo 'done!'."\n";
 
-    echo 'Cleaning up temporary files ... ';
-    unlink($setup['temp_dir'].'video.h264');
-    if ($setup['audio_codec'] == 'A_DTS') {
-        unlink($setup['temp_dir'].'audio.dts');
-    }
-    if ($setup['audio_codec'] == 'A_DTS' || $setup['audio_codec'] == 'A_AC3') {
-        unlink($setup['temp_dir'].'audio.ac3');
-    } else if ($setup['audio_codec'] ==	'A_AAC') {
-        unlink($setup['temp_dir'].'audio.aac');
-    }
-    unlink($setup['temp_dir'].'tsmuxer.meta');
-    echo 'done!'."\n";
+    cleanup_temp_files($setup);
 }
 
 
