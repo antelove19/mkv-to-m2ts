@@ -285,10 +285,12 @@ function validate_input(&$setup, $options) {
 /**
  * Cleanup any temporary files created during the media transcode / repackage process
  *
- * @param array $setup An array containing script setup data
+ * @param array $setup  An array containing script setup data
+ * @param bool  $repack Optional flag to indicate whether to check for and delete a repackaged MKV file
  */
-function cleanup_temp_files($setup) {
+function cleanup_temp_files($setup, $repack = false) {
     echo 'Cleaning up temporary files ... ';
+
     unlink($setup['temp_dir'].'video.h264');
     if ($setup['audio_codec'] == 'A_DTS') {
         unlink($setup['temp_dir'].'audio.dts');
@@ -299,6 +301,12 @@ function cleanup_temp_files($setup) {
         unlink($setup['temp_dir'].'audio.aac');
     }
     unlink($setup['temp_dir'].'tsmuxer.meta');
+
+    // If we have a repackaged MKV file, remove it now
+    if ($repack && isset($setup['file_repack']) && file_exists($setup['file_repack'])) {
+        unlink($setup['file_repack']);
+    }
+
     echo 'done!'."\n";
 }
 
@@ -442,7 +450,7 @@ function perform_transcode($setup) {
 
     echo 'done!'."\n";
 
-    cleanup_temp_files($setup);
+    cleanup_temp_files($setup, true);
 }
 
 
