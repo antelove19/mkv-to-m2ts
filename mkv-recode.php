@@ -164,6 +164,8 @@ function check_requirements(&$setup) {
         'dcadec'     => '',
         'aften'      => '',
         'tsMuxeR'    => '',
+        'ts2es'      => 'optional',
+        'faad'       => 'optional',
         'mkvmerge'   => 'optional'
     );
 
@@ -198,8 +200,15 @@ function validate_input(&$setup, $options) {
 
     // Check the container format of the input file
     $container_format = fetch_xpath_value($mediainfo, 'File/track[@type="General"]/Format', 'string', 'no input container format specified');
-    if (strtoupper($container_format) != 'MATROSKA') {
-        print_error('invalid input container format: '.$container_format);
+    if (strtoupper($container_format) != 'MATROSKA' && strtoupper($container_format) != 'MPEG-TS') {
+        print_error('invalid input container format: '.$container_format.' srttoupper() = '.strtoupper($container_format));
+    }
+
+    $setup['container_format'] = strtoupper($container_format);
+
+    // If this is a TS container, make sure that we have the required program to process this file
+    if ($setup['container_format'] == 'MPEG-TS' && $setup['programs']['ts2es'] == 'optional') {
+        print_error('required program to repackage an MPEG-TS container is missing: ts2es');
     }
 
     // Check for a video stream
@@ -211,7 +220,9 @@ function validate_input(&$setup, $options) {
 
     // Check for a valid video stream in the input file
     $video_format = fetch_xpath_value($video_stream, './Codec_ID', 'string', 'no input video codec specified');
-    if ($video_format != 'V_MPEG4/ISO/AVC') {
+
+    if (($setup['container_format'] == 'MATROSKA' && (string)$video_format != 'V_MPEG4/ISO/AVC') ||
+            $setup['container_format'] == 'MPEG-TS' && (int)$video_format != 27) {
         print_error('invalid input video codec: '.(string)$video_format);
     }
 
@@ -244,6 +255,9 @@ function validate_input(&$setup, $options) {
 
         // Prefer a DTS stream over an AC3 stream in the case where both are present
         if ($audio_format == 'A_DTS' || $audio_format == 'A_AC3' || $audio_format = 'A_AAC') {
+            if ($setup['container_format'] == 'MPEG-TS' && $audio_format == 'A_AAC' && $setup['programs']['faad'] == 'optional') {
+                print_error('required program to reencode AAC audio is missing: faad');
+            }
             // Get the audio stream language and verify that it is English
             $language = fetch_xpath_value($audio_stream, './Language', 'string', 'no audio stream language found');
             
@@ -256,6 +270,14 @@ function validate_input(&$setup, $options) {
             $setup['audio_stream'] = fetch_xpath_value($audio_stream, './ID', 'int', 'no audio stream ID found') - 1;
             $setup['audio_codec']  = $audio_format;
 
+            // Get the audio stream channel count
+            $audio_channels = fetch_xpath_value($audio_stream, './Channel_s_', 'string', 'no audio channel information found');
+            preg_match('/([0-9]) CHANNELS/', strtoupper($audio_channels), $matches);
+            if (!isset($matches[1])) {
+                print_error('could not detect valid audio channel information');
+            }
+            $setup['audio_channels'] = $matches[1];
+
             // For DTS we need to gather more information for converting the audio into AC3 format
             if ($setup['audio_codec'] == 'A_DTS') {
                 // Get the audio stream bitrate
@@ -265,14 +287,6 @@ function validate_input(&$setup, $options) {
                     print_error('could not detect valid audio bit rate');
                 }
                 $setup['audio_bitrate'] = $matches[1];
-
-                // Get the audio stream channel count
-                $audio_channels = fetch_xpath_value($audio_stream, './Channel_s_', 'string', 'no audio channel information found');
-                preg_match('/([0-9]) CHANNELS/', strtoupper($audio_channels), $matches);
-                if (!isset($matches[1])) {
-                    print_error('could not detect valid audio channel information');
-                }
-                $setup['audio_channels'] = $matches[1];
             }
         }
     }
@@ -335,7 +349,7 @@ function container_rebuild($setup) {
             break;
 
         case 'A_AAC':
-            $execstr .= '-aac-is-sbr 0 '.$setup['temp_dir'].'audio.aac';
+            $execstr .= '--aac-is-sbr 0 '.$setup['temp_dir'].'audio.aac';
             break;
     }
 
@@ -371,20 +385,35 @@ function perform_transcode($setup) {
         $infile = $setup['file_in'];
     }
 
+    // Determine which specific program we are using to extract elementary streams out of our container file
+    if ($setup['container_format'] == 'MATROSKA') {
+        $extractor = $setup['programs']['mkvextract'];
+    } else if ($setup['container_format'] == 'MPEG-TS') {
+        $extractor = $setup['programs']['ts2es'];
+    }
+
     // Extract the video stream into a file
     echo 'Extracting video stream ... ';
-    exec($setup['programs']['mkvextract'].' tracks "'.$infile.'" '.$setup['video_stream'].':'.$setup['temp_dir'].'video.h264', $output, $return);
+    if ($setup['container_format'] == 'MATROSKA') {
+        exec($extractor.' tracks "'.$infile.'" '.$setup['video_stream'].':'.$setup['temp_dir'].'video.h264', $output, $return);
+    } else if ($setup['container_format'] == 'MPEG-TS') {
+        exec($extractor.' -video "'.$infile.'" '.$setup['temp_dir'].'video.h264', $output, $return);
+    }
     if ($return != 0) {
-        print_error('failure while executing mkvextract'."\n\n".implode("\n", $output));
+        print_error('failure while executing '.$extractor."\n\n".implode("\n", $output));
     }
     echo 'done!'."\n";
 
     // DTS audio must be converted to AC3 format
     if ($setup['audio_codec'] == 'A_DTS') {
         echo 'Extracting audio stream ... ';
-        exec($setup['programs']['mkvextract'].' tracks "'.$infile.'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.dts', $output, $return);
+        if ($setup['container_format'] == 'MATROSKA') {
+            exec($extractor.' tracks "'.$infile.'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.dts', $output, $return);
+        } else if ($setup['container_format'] == 'MPEG-TS') {
+            exec($extractor.' -audio "'.$infile.'" '.$setup['temp_dir'].'audio.dts', $output, $return);
+        }
         if ($return != 0) {
-            print_error('failure while executing mkvextract'."\n\n".implode("\n", $output));
+            print_error('failure while executing '.$extractor."\n\n".implode("\n", $output));
         }
         echo 'done!'."\n";
 
@@ -396,18 +425,39 @@ function perform_transcode($setup) {
         echo 'done!'."\n";
     } else if ($setup['audio_codec'] == 'A_AC3') {
         echo 'Extracting audio stream ... ';
-        exec($setup['programs']['mkvextract'].' tracks "'.$infile.'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.ac3', $output, $return);
+        if ($setup['container_format'] == 'MATROSKA') {
+            exec($extractor.' tracks "'.$infile.'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.ac3', $output, $return);
+        } else if ($setup['container_format'] == 'MPEG-TS') {
+            exec($extractor.' -audio "'.$infile.'" '.$setup['temp_dir'].'audio.ac3', $output, $return);
+        }
         if ($return != 0) {
-            print_error('failure while executing mkvextract'."\n\n".implode("\n", $output));
+            print_error('failure while executing '.$extractor."\n\n".implode("\n", $output));
         }
         echo 'done!'."\n";
     } else if ($setup['audio_codec'] == 'A_AAC') {
         echo 'Extracting audio stream ... ';
-        exec($setup['programs']['mkvextract'].' tracks "'.$infile.'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.aac', $output, $return);
+        if ($setup['container_format'] == 'MATROSKA') {
+            exec($extractor.' tracks "'.$infile.'" '.$setup['audio_stream'].':'.$setup['temp_dir'].'audio.aac', $output, $return);
+        } else if ($setup['container_format'] == 'MPEG-TS') {
+            exec($extractor.' -audio "'.$infile.'" '.$setup['temp_dir'].'audio.aac', $output, $return);
+        }
+
         if ($return != 0) {
-            print_error('failure while executing mkvextract'."\n\n".implode("\n", $output));
+            print_error('failure while executing '.$extractor."\n\n".implode("\n", $output));
         }
         echo 'done!'."\n";
+
+        if ($setup['container_format'] == 'MPEG-TS') {
+            echo 'Converting AAC audio to AC3 ... ';
+            exec($setup['programs']['faad'].' -b 2 -f 2 -q -w '.$setup['temp_dir'].'audio.aac | aften -v 1 -b 640 -raw_fmt s24_le -raw_sr '.
+                    '48000 -raw_ch '.$setup['audio_channels'].' -chmap 2 - '.$setup['temp_dir'].'audio.ac3', $output, $return);
+
+            if ($return != 0) {
+                print_error('failure while converting AAC to AC3'."\n\n".implode("\n", $output));
+            }
+            $setup['audio_codec'] = 'A_AC3';
+            echo 'done!'."\n";
+        }
     }
 
     // Generate the meta information file for tsMuxeR
@@ -415,7 +465,7 @@ function perform_transcode($setup) {
         print_error('Cculd not open meta file for writing');
     }
 
-    fwrite($fh, 'MUXOPT --no-pcr-on-video-pid --new-audio-pes --vbr  --vbv-len=500'."\n");
+    fwrite($fh, 'MUXOPT --no-pcr-on-video-pid --new-audio-pes --vbr --vbv-len=500'."\n");
 
     if ($setup['video_format_level'] == 4.1 || $setup['video_format_level'] > 5) {
         fwrite($fh, 'V_MPEG4/ISO/AVC, "'.$setup['temp_dir'].'video.h264", level=4.1, insertSEI, contSPS, lang=eng, fps='.$setup['video_fps']."\n");
@@ -425,7 +475,7 @@ function perform_transcode($setup) {
 
     if ($setup['audio_codec'] == 'A_DTS' || $setup['audio_codec'] == 'A_AC3') {
         fwrite($fh, 'A_AC3, "'.$setup['temp_dir'].'audio.ac3"'."\n");
-    } else if ($setup['audio_codec'] == 'A_AAc') {
+    } else if ($setup['audio_codec'] == 'A_AAC') {
         fwrite($fh, 'A_AAC, "'.$setup['temp_dir'].'audio.aac"'."\n");
     }
     fclose($fh);
