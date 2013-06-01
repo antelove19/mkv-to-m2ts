@@ -108,7 +108,14 @@ function validate_parameters(&$setup, $options) {
             if ($options['o'][strlen($options['o']) - 1] != '/') {
                 $options['o'] .= '/';
             }
-            $setup['file_out'] = $options['o'].basename($setup['file_in'], '.mkv').'.m2ts';
+
+            // Determine which file extension we're dealing with
+            if (substr($setup['file_in'], -3) == '.ts') {
+                $filein = basename($setup['file_in'], '.ts');
+            } else if (substr($setup['file_in'], -4) == '.mkv') {
+                $filein = basename($setup['file_in'], '.mkv');
+            }
+            $setup['file_out'] = $options['o'].$filein.'.m2ts';
 
         // If a full file path was specified, verify that the directory exists and the given file name does not
         } else {
