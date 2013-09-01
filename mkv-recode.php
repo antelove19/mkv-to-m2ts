@@ -25,9 +25,9 @@
  * - ffmpeg     -- htttp://ffmpeg.org/
  * - mediainfo  -- http://mediainfo.sourceforge.net/en/
  * - mkvtoolnix -- http://www.bunkus.org/videotools/mkvtoolnix/
- * 
+ *
  * @author    Justin Filip <jfilip@gmail.com>
- * @copyright 2012 -- Justin Filip
+ * @copyright 2012 and onwards` Justin Filip
  * @link      https://github.com/jfilip/mkv-to-m2ts
  * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
@@ -267,7 +267,7 @@ function validate_input(&$setup, $options) {
             }
             // Get the audio stream language and verify that it is English
             $language = fetch_xpath_value($audio_stream, './Language', 'string', 'no audio stream language found');
-            
+
             // If an audio language is specified and it is not English, keep looking (assume English if no language specified)
             if (!empty($language) && strtoupper($language) != 'ENGLISH') {
                 continue;
