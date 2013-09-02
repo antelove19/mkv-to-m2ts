@@ -27,7 +27,7 @@
  * - mkvtoolnix -- http://www.bunkus.org/videotools/mkvtoolnix/
  *
  * @author    Justin Filip <jfilip@gmail.com>
- * @copyright 2012 and onwards` Justin Filip
+ * @copyright 2012 and onwards Justin Filip http://jfilip.ca/
  * @link      https://github.com/jfilip/mkv-to-m2ts
  * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
@@ -279,6 +279,12 @@ function validate_input(&$setup, $options) {
 
             // Get the audio stream channel count
             $audio_channels = fetch_xpath_value($audio_stream, './Channel_s_', 'string', 'no audio channel information found');
+
+            // Newer versions of mediainfo are reporting this differently, it would appear
+            if (empty($audio_channels)) {
+                $audio_channels = fetch_xpath_value($audio_stream, './Channel_count', 'string', 'no audio channel information found');
+            }
+
             preg_match('/([0-9]) CHANNELS/', strtoupper($audio_channels), $matches);
             if (!isset($matches[1])) {
                 print_error('could not detect valid audio channel information');
@@ -517,7 +523,6 @@ function perform_transcode($setup) {
 
 
 // Get CLI script arguments
-// if (($options = getopt('', array('in:', 'out::', 'tmp::'))) == false) {
 if (!$options = getopt("i:o::t::")) {
     print_usage($argv);
 }
